@@ -1,0 +1,127 @@
+mod browser;
+mod config;
+mod filter;
+mod human;
+mod login;
+mod notifier;
+mod reddit;
+
+use clap::Parser;
+use std::collections::HashSet;
+use std::path::Path;
+use tracing_subscriber::{fmt, EnvFilter};
+
+#[derive(Parser, Debug)]
+#[command(name="reddit-scrappe")]
+struct Args {
+    #[arg(long = "loop", default_value_t = false)]
+    loop_mode: bool,
+    #[arg(long, default_value_t = false)]
+    once: bool,
+    #[arg(long)]
+    login: bool,
+    #[arg(long)]
+    logout: bool,
+    #[arg(long, default_value="config.yaml")]
+    config: String,
+    #[arg(long, default_value="seen.json")]
+    seen: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    init_tracing();
+
+    if args.login {
+        login::login_flow().await?;
+        return Ok(());
+    }
+    if args.logout {
+        login::logout_flow()?;
+        return Ok(());
+    }
+
+    let cfg_path = args.config;
+    let seen_path = args.seen;
+
+    let do_loop = args.loop_mode || (!args.once && std::env::args().any(|a| a=="--loop"));
+    // default once
+    if do_loop {
+        let cfg = config::load_config(&cfg_path)?;
+        let minutes = cfg.schedule_minutes;
+        tracing::info!("[loop] cada {} min (+ jitter 2m) Secuencial anónimo STDOUT", minutes);
+        // launch browser once
+        let handle = browser::launch_browser().await?;
+        let browser = &handle.browser;
+        loop {
+            if let Err(e) = run_once(browser, &cfg_path, &seen_path).await {
+                tracing::error!("[loop] error: {:?}", e);
+            }
+            let jitter: i64 = rand::random::<i64>() % 120 - 60; // +-60s
+            let sleep_secs = (minutes as i64 * 60 + jitter).max(30) as u64;
+            tracing::info!("[loop] durmiendo {}s...", sleep_secs);
+            tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
+        }
+    } else {
+        // --once: need browser
+        let handle = browser::launch_browser().await?;
+        run_once(&handle.browser, &cfg_path, &seen_path).await?;
+        // browser closes on drop
+    }
+    Ok(())
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    fmt().with_env_filter(filter).with_target(false).init();
+}
+
+async fn run_once(browser: &chromiumoxide::browser::Browser, cfg_path: &str, seen_path: &str) -> anyhow::Result<()> {
+    let cfg = config::load_config(cfg_path)?;
+    let seen = load_seen(seen_path);
+    let mut new_seen = seen.clone();
+    let mut total_new = 0;
+
+    for q in &cfg.queries {
+        tracing::info!("[query:{}] buscando \"{}\" en {:?} sort={}", q.name, q.q, if q.subreddits.is_empty(){"all".to_string()} else {q.subreddits.join(",")}, q.sort);
+        let page = browser.new_page("about:blank").await?;
+        let posts = match reddit::search_human(&page, &q.q, &q.subreddits, &q.sort).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("[query:{}] search error: {:?}", q.name, e);
+                let _ = page.close().await;
+                continue;
+            }
+        };
+        let _ = page.close().await;
+        tracing::info!("[query:{}] {} raw posts", q.name, posts.len());
+        let filtered = filter::filter_posts(posts, &cfg.filters);
+        tracing::info!("[query:{}] {} after filter (min_score={} max_age={}h)", q.name, filtered.len(), cfg.filters.min_score, cfg.filters.max_age_hours);
+        let fresh: Vec<_> = filtered.into_iter().filter(|p| !seen.contains(&p.id)).collect();
+        for p in &fresh { new_seen.insert(p.id.clone()); }
+        total_new += fresh.len();
+        notifier::notify_console(&fresh, &q.name);
+        // sequential jitter between queries
+        human::sleep_jitter(2000, 4000).await;
+    }
+    save_seen(seen_path, &new_seen)?;
+    tracing::info!("[done] total vistos: {} nuevos esta corrida: {}", new_seen.len(), total_new);
+    Ok(())
+}
+
+fn load_seen(path: &str) -> HashSet<String> {
+    if Path::new(path).exists() {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(v) = serde_json::from_str::<Vec<String>>(&raw) {
+                return v.into_iter().collect();
+            }
+        }
+    }
+    HashSet::new()
+}
+fn save_seen(path: &str, seen: &HashSet<String>) -> anyhow::Result<()> {
+    let v: Vec<_> = seen.iter().cloned().collect();
+    std::fs::write(path, serde_json::to_string_pretty(&v)?)?;
+    Ok(())
+}

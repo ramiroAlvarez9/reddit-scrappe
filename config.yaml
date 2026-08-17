@@ -1,0 +1,32 @@
+# Cada query es una "temática" para buscar posts donde hablar de OrchardRun
+queries:
+  - name: "orchard ai infra"
+    q: "AI infrastructure OR MLOps OR vector database"
+    subreddits: ["MachineLearning", "artificial", "LocalLLaMA", "datascience"]
+    sort: "new" # new | relevance | top
+    limit: 20
+
+  - name: "startup fundraising"
+    q: "seed round OR fundraising OR VC"
+    subreddits: ["startups", "Entrepreneur", "vc"]
+    sort: "new"
+    limit: 20
+
+  - name: "orchardrun directo"
+    q: "orchard"
+    subreddits: [] # vacío = busca en todo reddit
+    sort: "new"
+    limit: 10
+
+# Filtros globales
+filters:
+  min_score: 2
+  min_comments: 0
+  max_age_hours: 48 # solo posts de últimas 48h
+  exclude_nsfw: true
+
+# Cada cuántos minutos revisa
+schedule_minutes: 30
+
+# Donde avisa: "telegram" | "webhook" | "console"
+notifier: "telegram"

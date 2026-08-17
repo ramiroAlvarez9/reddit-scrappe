@@ -1,0 +1,9 @@
+/target
+# reddit-scrappe session (contiene cookies de login, no commitear)
+.reddit-scrappe-profile
+profile/
+cookies.json
+seen.json
+/tmp/reddit_debug.html
+__pycache__/
+*.pyc
