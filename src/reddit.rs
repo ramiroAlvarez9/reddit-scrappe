@@ -342,6 +342,7 @@ fn build_reqwest_proxy() -> Option<reqwest::Proxy> {
     }
 }
 
+#[allow(dead_code)]
 pub async fn search_fallback_old_reddit(query: &str, sub: String) -> anyhow::Result<Vec<Post>> {
     search_fallback_old_reddit_with_cookies(query, sub, None).await
 }
