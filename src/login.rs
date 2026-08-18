@@ -17,15 +17,19 @@ pub async fn login_flow() -> anyhow::Result<()> {
     tracing::info!("[login] abriendo Chrome headed en https://www.reddit.com/login");
     tracing::info!("[login] logueate manualmente en la ventana (captcha/2FA si pide)");
 
-    let config = BrowserConfig::builder()
+    let mut builder = BrowserConfig::builder()
         .chrome_executable(crate::browser::detect_chrome())
         .user_data_dir(&dir)
         .with_head()
         .arg("--no-sandbox")
         .arg("--disable-dev-shm-usage")
         .arg("--window-size=1280,720")
-        .arg("--lang=en-US,en")
-        .build().map_err(|e| anyhow::anyhow!(e))?;
+        .arg("--lang=en-US,en");
+    if let Some(p) = crate::browser::proxy_server_arg() {
+        builder = builder.arg(format!("--proxy-server={}", p)).arg("--proxy-bypass-list=<-loopback>");
+        tracing::info!("[proxy] login headed via {}", "gw.dataimpulse.com");
+    }
+    let config = builder.build().map_err(|e| anyhow::anyhow!(e))?;
 
     let (mut browser, mut handler) = Browser::launch(config).await?;
     let handle = tokio::spawn(async move {
@@ -56,10 +60,15 @@ pub async fn login_flow() -> anyhow::Result<()> {
         tracing::info!("[login] sesión parece logueada ({} cookies reddit)", reddit_cookies.len());
     }
 
-    // save cookies json for debug
-    let cookies_path = dir.join("cookies.json");
-    let _ = std::fs::write(&cookies_path, serde_json::to_string_pretty(&cookies)?);
-    tracing::info!("[login] cookies guardadas en {}", cookies_path.display());
+    // save cookies json (decrypted via CDP) for --no-browser reuse
+    let cookies_json = serde_json::to_value(&cookies).unwrap_or(serde_json::Value::Null);
+    if let Err(e) = crate::cookies::save_cookies(&cookies_json) {
+        tracing::warn!("[login] failed to save cookies via cookies module: {:?}", e);
+        // fallback direct write
+        let cookies_path = dir.join("cookies.json");
+        let _ = std::fs::write(&cookies_path, serde_json::to_string_pretty(&cookies)?);
+        tracing::info!("[login] cookies guardadas (fallback) en {}", cookies_path.display());
+    }
     tracing::info!("[login] perfil guardado en {} - ahora `cargo run -- --once` usará sesión sin captcha", dir.display());
 
     browser.close().await?;

@@ -7,3 +7,4 @@ seen.json
 /tmp/reddit_debug.html
 __pycache__/
 *.pyc
+.env

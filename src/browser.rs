@@ -1,9 +1,74 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use futures::StreamExt;
 
+const PROXY_HOST: &str = "gw.dataimpulse.com";
+const PROXY_PORT_HTTP: u16 = 823;
+const PROXY_PORT_SOCKS: u16 = 824;
+
 pub struct BrowserHandle {
     pub browser: Browser,
     _handler: tokio::task::JoinHandle<()>,
+}
+
+/// Build DataImpulse proxy username with optional targeting (same syntax as dataimpulse-mcp)
+fn build_proxy_user(base: &str, country: Option<&str>, city: Option<&str>, session: Option<&str>) -> Result<String, String> {
+    let mut params: Vec<String> = Vec::new();
+    if let Some(c) = country {
+        let c = c.trim().to_lowercase();
+        if c.len() != 2 {
+            return Err(format!("country must be ISO2, got '{}'", c));
+        }
+        params.push(format!("cr.{}", c));
+    }
+    if let Some(city) = city {
+        let city = city.trim();
+        if city.is_empty() { return Err("city cannot be empty".to_string()); }
+        if country.is_none() { return Err("city requires country".to_string()); }
+        params.push(format!("city.{}", city.to_lowercase()));
+    }
+    if let Some(sess) = session {
+        let sess = sess.trim().replace(' ', "_");
+        if sess.is_empty() { return Err("session cannot be empty".to_string()); }
+        params.push(format!("sessid.{}", sess));
+    }
+    if params.is_empty() { Ok(base.to_string()) } else { Ok(format!("{}__{}", base, params.join(";"))) }
+}
+
+pub fn proxy_server_arg() -> Option<String> {
+    let user = std::env::var("DI_USER").ok()?;
+    let pass = std::env::var("DI_PASS").ok()?;
+    if user.trim().is_empty() || pass.trim().is_empty() { return None; }
+    let country = std::env::var("DI_COUNTRY").ok();
+    let city = std::env::var("DI_CITY").ok();
+    let session = std::env::var("DI_SESSION").ok();
+    let use_socks = std::env::var("DI_USE_SOCKS").map(|v| v=="1" || v.to_lowercase()=="true").unwrap_or(false);
+    let scheme = if use_socks { "socks5" } else { "http" };
+    let port = if use_socks { PROXY_PORT_SOCKS } else { PROXY_PORT_HTTP };
+    let proxy_user = match build_proxy_user(&user, country.as_deref(), city.as_deref(), session.as_deref()) {
+        Ok(u) => u,
+        Err(e) => { tracing::warn!("[proxy] build_proxy_user error: {}", e); return None; }
+    };
+    // encode password, encode user only for @ : space %
+    let mut encoded_user = proxy_user.clone();
+    if proxy_user.contains('@') || proxy_user.contains(':') || proxy_user.contains(' ') || proxy_user.contains('%') {
+        encoded_user = proxy_user.replace('%', "%25").replace('@', "%40").replace(':', "%3A").replace(' ', "%20");
+    }
+    // simple percent-encode password
+    let encoded_pass = {
+        let mut out = String::new();
+        for b in pass.bytes() {
+            let c = b as char;
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') { out.push(c); }
+            else { out.push_str(&format!("%{:02X}", b)); }
+        }
+        out
+    };
+    let proxy_url = format!("{}://{}:{}@{}:{}", scheme, encoded_user, encoded_pass, PROXY_HOST, port);
+    let country_log = country.as_deref().unwrap_or("-");
+    let city_log = city.as_deref().unwrap_or("-");
+    let session_log = session.as_deref().unwrap_or("-");
+    tracing::info!("[proxy] enabled via {}:{} country={} city={} session={} scheme={} (creds hidden)", PROXY_HOST, port, country_log, city_log, session_log, scheme);
+    Some(proxy_url)
 }
 
 pub async fn launch_browser() -> anyhow::Result<BrowserHandle> {
@@ -30,8 +95,12 @@ pub async fn launch_browser() -> anyhow::Result<BrowserHandle> {
         let _ = std::fs::create_dir_all(&fallback);
         fallback
     };
+    let proxy_url = proxy_server_arg();
+    if proxy_url.is_none() {
+        tracing::info!("[proxy] disabled (set DI_USER/DI_PASS to enable residential proxy)");
+    }
     let final_config = if use_headed {
-        BrowserConfig::builder()
+        let mut b = BrowserConfig::builder()
             .chrome_executable(detect_chrome())
             .user_data_dir(&tmp_dir)
             .with_head()
@@ -41,10 +110,14 @@ pub async fn launch_browser() -> anyhow::Result<BrowserHandle> {
             .arg("--disable-blink-features=AutomationControlled")
             .arg("--window-size=1280,720")
             .arg("--lang=en-US,en")
-            .arg("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36")
-            .build().unwrap()
+            .arg("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36");
+        if let Some(ref p) = proxy_url {
+            b = b.arg(format!("--proxy-server={}", p)).arg("--proxy-bypass-list=<-loopback>");
+            tracing::info!("[proxy] headed browser will use proxy {}", PROXY_HOST);
+        }
+        b.build().unwrap()
     } else {
-        BrowserConfig::builder()
+        let mut b = BrowserConfig::builder()
             .chrome_executable(detect_chrome())
             .user_data_dir(&tmp_dir)
             .new_headless_mode()
@@ -55,8 +128,12 @@ pub async fn launch_browser() -> anyhow::Result<BrowserHandle> {
             .arg("--window-size=1280,720")
             .arg("--disable-gpu")
             .arg("--lang=en-US,en")
-            .arg("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36")
-            .build().unwrap()
+            .arg("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36");
+        if let Some(ref p) = proxy_url {
+            b = b.arg(format!("--proxy-server={}", p)).arg("--proxy-bypass-list=<-loopback>");
+            tracing::info!("[proxy] headless browser will use proxy {}", PROXY_HOST);
+        }
+        b.build().unwrap()
     };
 
     let (browser, mut handler) = Browser::launch(final_config).await?;

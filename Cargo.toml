@@ -17,8 +17,9 @@ chrono = "0.4"
 scraper = "0.27"
 futures = "0.3"
 anyhow = "1"
-reqwest = { version = "0.13", features = ["json", "rustls"] }
+reqwest = { version = "0.13", features = ["json", "rustls", "socks"] }
 dirs = "5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"
