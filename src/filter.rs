@@ -73,4 +73,48 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].id, "1"); // higher engagement first
     }
+
+    #[test]
+    fn filters_by_min_comments() {
+        let f = Filters { min_score: 0, min_comments: 5, max_age_hours: 48, exclude_nsfw: false };
+        let posts = vec![mk("1", 10, 10, 1, false), mk("2", 10, 3, 1, false)];
+        let out = filter_posts(posts, &f);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "1");
+    }
+
+    #[test]
+    fn max_age_boundary_exact() {
+        // max_age 48h: age 48h -> keep, 49h -> reject (now - 48h vs 49h)
+        let f = Filters { min_score: 0, min_comments: 0, max_age_hours: 48, exclude_nsfw: false };
+        let posts = vec![mk("exact", 5, 0, 48, false), mk("old", 5, 0, 49, false)];
+        let out = filter_posts(posts, &f);
+        assert!(out.iter().any(|p| p.id == "exact"), "exact boundary should be kept");
+        assert!(!out.iter().any(|p| p.id == "old"), "49h should be filtered");
+    }
+
+    #[test]
+    fn exclude_nsfw_false_keeps_nsfw() {
+        let f_false = Filters { min_score: 0, min_comments: 0, max_age_hours: 48, exclude_nsfw: false };
+        let f_true = Filters { min_score: 0, min_comments: 0, max_age_hours: 48, exclude_nsfw: true };
+        let posts = vec![mk("nsfw", 5, 0, 1, true)];
+        assert_eq!(filter_posts(posts.clone(), &f_false).len(), 1);
+        assert_eq!(filter_posts(posts, &f_true).len(), 0);
+    }
+
+    #[test]
+    fn sort_by_engagement_ties() {
+        // engagement = score + comments*2
+        // p1: 10 + 0*2 =10, p2: 5+5*2=15 -> p2 first
+        let f = Filters { min_score: 0, min_comments: 0, max_age_hours: 48, exclude_nsfw: false };
+        let posts = vec![mk("low", 10, 0, 1, false), mk("high", 5, 5, 1, false), mk("mid", 8, 1, 1, false)];
+        let out = filter_posts(posts, &f);
+        assert_eq!(out[0].id, "high");
+        assert_eq!(out[1].id, "low");
+        assert_eq!(out[2].id, "mid");
+        // tie: stable sort not required but both should be present
+        let posts_tie = vec![mk("a", 5, 2, 1, false), mk("b", 5, 2, 1, false)];
+        let out = filter_posts(posts_tie, &f);
+        assert_eq!(out.len(), 2);
+    }
 }

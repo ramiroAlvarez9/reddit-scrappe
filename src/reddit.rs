@@ -513,7 +513,7 @@ fn parse_old_reddit_html(html: &str) -> Vec<Post> {
     out
 }
 
-fn parse_reddit_json(json_str: &str) -> Vec<Post> {
+pub(crate) fn parse_reddit_json(json_str: &str) -> Vec<Post> {
     let v: serde_json::Value = match serde_json::from_str(json_str) {
         Ok(j) => j,
         Err(_) => return vec![],
@@ -551,12 +551,16 @@ fn parse_reddit_json(json_str: &str) -> Vec<Post> {
     out
 }
 
-pub async fn search_old_reddit_json(query: &str, sub: &str, cookie_header: Option<String>, limit: u32) -> anyhow::Result<Vec<Post>> {
-    let url = if sub.is_empty() {
+pub(crate) fn build_search_json_url(query: &str, sub: &str, limit: u32) -> String {
+    if sub.is_empty() {
         format!("https://old.reddit.com/search.json?q={}&sort=new&t=week&limit={}", urlencoding(query), limit)
     } else {
         format!("https://old.reddit.com/r/{}/search.json?q={}&sort=new&t=week&restrict_sr=on&limit={}", sub, urlencoding(query), limit)
-    };
+    }
+}
+
+pub async fn search_old_reddit_json(query: &str, sub: &str, cookie_header: Option<String>, limit: u32) -> anyhow::Result<Vec<Post>> {
+    let url = build_search_json_url(query, sub, limit);
     tracing::info!("[fallback json] GET {}", url);
     let mut builder = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36")
@@ -595,7 +599,7 @@ pub async fn search_old_reddit_json(query: &str, sub: &str, cookie_header: Optio
     Ok(posts)
 }
 
-fn urlencoding(s: &str) -> String {
+pub(crate) fn urlencoding(s: &str) -> String {
     s.replace(' ', "+")
 }
 
@@ -625,6 +629,190 @@ mod tests {
         assert!(is_captcha("<div>captcha challenge</div>"));
         assert!(is_captcha("<title>Reddit - Prove your humanity</title><script src=\"recaptcha/api.js\""));
         assert!(!is_captcha("<shreddit-post></shreddit-post>"));
+    }
+
+    #[test]
+    fn urlencoding_spaces_to_plus() {
+        assert_eq!(urlencoding("rust"), "rust");
+        assert_eq!(urlencoding("rust lang"), "rust+lang");
+        assert_eq!(urlencoding("a b  c"), "a+b++c");
+        assert_eq!(urlencoding("AI infrastructure OR MLOps"), "AI+infrastructure+OR+MLOps");
+        assert_eq!(urlencoding(""), "");
+    }
+
+    #[test]
+    fn url_build_all_vs_sub() {
+        let url_all = build_search_json_url("rust lang", "", 10);
+        assert_eq!(
+            url_all,
+            "https://old.reddit.com/search.json?q=rust+lang&sort=new&t=week&limit=10"
+        );
+        assert!(!url_all.contains("restrict_sr"));
+        let url_sub = build_search_json_url("rust", "programming", 3);
+        assert_eq!(
+            url_sub,
+            "https://old.reddit.com/r/programming/search.json?q=rust&sort=new&t=week&restrict_sr=on&limit=3"
+        );
+        // limit propagated
+        let url_limit = build_search_json_url("AI infrastructure OR MLOps", "", 25);
+        assert!(url_limit.contains("limit=25"));
+        assert!(url_limit.contains("q=AI+infrastructure+OR+MLOps"));
+    }
+
+    #[test]
+    fn parse_reddit_json_single() {
+        let json = r#"{"data":{"children":[{"data":{"id":"abc123","title":"Hello Rust","subreddit":"rust","author":"u1","score":42,"num_comments":7,"permalink":"/r/rust/comments/abc123/hello_rust/","over_18":false,"created_utc":1700000000,"selftext":"body"}}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].id, "abc123");
+        assert_eq!(posts[0].title, "Hello Rust");
+        assert_eq!(posts[0].subreddit, "rust");
+        assert_eq!(posts[0].url, "https://www.reddit.com/r/rust/comments/abc123/hello_rust/");
+        assert_eq!(posts[0].score, 42);
+        assert_eq!(posts[0].num_comments, 7);
+        assert_eq!(posts[0].created_utc, 1700000000);
+    }
+
+    #[test]
+    fn parse_reddit_json_skips_missing_fields() {
+        // missing title -> skipped
+        let json_no_title = r#"{"data":{"children":[{"data":{"id":"abc","subreddit":"rust","permalink":"/r/rust/comments/abc/x/"}}]}}"#;
+        assert_eq!(parse_reddit_json(json_no_title).len(), 0);
+        // missing id -> skipped
+        let json_no_id = r#"{"data":{"children":[{"data":{"title":"t","subreddit":"rust","permalink":"/r/rust/comments/abc/x/"}}]}}"#;
+        assert_eq!(parse_reddit_json(json_no_id).len(), 0);
+        // absolute permalink kept as-is
+        let json_abs = r#"{"data":{"children":[{"data":{"id":"x","title":"t","subreddit":"rust","permalink":"https://www.reddit.com/r/rust/comments/x/t/","score":1,"num_comments":0,"over_18":false,"created_utc":1700000000}}]}}"#;
+        let posts = parse_reddit_json(json_abs);
+        assert_eq!(posts[0].url, "https://www.reddit.com/r/rust/comments/x/t/");
+        // relative permalink prefixed
+        let json_rel = r#"{"data":{"children":[{"data":{"id":"y","title":"t2","subreddit":"rust","permalink":"/r/rust/comments/y/t2/","score":1,"num_comments":0,"over_18":false,"created_utc":1700000000}}]}}"#;
+        assert_eq!(parse_reddit_json(json_rel)[0].url, "https://www.reddit.com/r/rust/comments/y/t2/");
+    }
+
+    #[test]
+    fn parse_reddit_json_empty_and_invalid() {
+        assert_eq!(parse_reddit_json(r#"{"data":{"children":[]}}"#).len(), 0);
+        assert_eq!(parse_reddit_json("not json").len(), 0);
+        assert_eq!(parse_reddit_json("").len(), 0);
+        assert_eq!(parse_reddit_json(r#"{"data":null}"#).len(), 0);
+        assert_eq!(parse_reddit_json(r#"{"kind":"Listing"}"#).len(), 0);
+    }
+
+    #[test]
+    fn parse_reddit_json_maps_all_fields() {
+        let json = r#"{"data":{"children":[{"data":{"id":"zzz","title":"T","subreddit":"MachineLearning","author":"alice","score":100,"num_comments":50,"permalink":"/r/MachineLearning/comments/zzz/t/","over_18":true,"created_utc":1700000000.5,"selftext":"hello world"}}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        let p = &posts[0];
+        assert_eq!(p.author, "alice");
+        assert_eq!(p.subreddit, "MachineLearning");
+        assert_eq!(p.score, 100);
+        assert_eq!(p.num_comments, 50);
+        assert!(p.over_18);
+        assert_eq!(p.selftext, "hello world");
+        // float truncated to u64
+        assert_eq!(p.created_utc, 1700000000);
+    }
+
+    #[test]
+    fn captcha_detect_variants() {
+        assert!(is_captcha("blocked by network security"));
+        assert!(is_captcha("BLOCKED BY NETWORK SECURITY"));
+        assert!(is_captcha("cf-challenge running"));
+        assert!(is_captcha("cf-turnstile"));
+        assert!(is_captcha("hcaptcha.com"));
+        assert!(!is_captcha("normal shreddit-post content"));
+        assert!(!is_captcha(r#"{"data":{"children":[]}}"#));
+    }
+
+    #[test]
+    fn urlencoding_edge_cases() {
+        // only spaces replaced, other chars left as-is (naive impl)
+        assert_eq!(urlencoding("rust & go"), "rust+&+go");
+        assert_eq!(urlencoding("a=b&c"), "a=b&c");
+        assert_eq!(urlencoding("  leading and trailing  "), "++leading+and+trailing++");
+        // empty stays empty
+        assert_eq!(urlencoding(""), "");
+    }
+
+    #[test]
+    fn url_build_limit_zero_and_special_q() {
+        let url = build_search_json_url("", "", 0);
+        assert!(url.contains("q=&"));
+        assert!(url.contains("limit=0"));
+        // q with & stays literal (naive encoding)
+        let url = build_search_json_url("rust & go", "", 5);
+        assert!(url.contains("q=rust+&+go"));
+        // sub with value still restricts
+        let url = build_search_json_url("test", "rust", 10);
+        assert!(url.contains("/r/rust/"));
+        assert!(url.contains("restrict_sr=on"));
+    }
+
+    #[test]
+    fn parse_reddit_json_missing_created_utc_uses_fallback() {
+        let before = chrono::Utc::now().timestamp() as u64;
+        let json = r#"{"data":{"children":[{"data":{"id":"a","title":"t","subreddit":"rust","permalink":"/r/rust/comments/a/t/","score":1,"num_comments":0,"over_18":false,"selftext":"x"}}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        let after = chrono::Utc::now().timestamp() as u64;
+        // fallback to now, so created_utc should be between before and after
+        assert!(posts[0].created_utc >= before && posts[0].created_utc <= after);
+        assert_eq!(posts[0].selftext, "x");
+    }
+
+    #[test]
+    fn parse_reddit_json_score_string_fallbacks_to_zero() {
+        // score as string -> as_i64 fails -> 0
+        let json = r#"{"data":{"children":[{"data":{"id":"b","title":"t","subreddit":"rust","permalink":"/r/rust/comments/b/t/","score":"42","num_comments":"7","over_18":false,"created_utc":1700000000}}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].score, 0);
+        assert_eq!(posts[0].num_comments, 0);
+    }
+
+    #[test]
+    fn parse_reddit_json_permalink_missing_defaults() {
+        let json = r#"{"data":{"children":[{"data":{"id":"c","title":"t","subreddit":"rust","score":1,"num_comments":0,"over_18":false,"created_utc":1700000000}}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        // missing permalink -> "#" -> https://www.reddit.com#
+        assert_eq!(posts[0].url, "https://www.reddit.com#");
+    }
+
+    #[test]
+    fn parse_reddit_json_children_with_null_and_mixed() {
+        let json = r#"{"data":{"children":[null,{"data":null},{"data":{"id":"ok","title":"good","subreddit":"rust","permalink":"/r/rust/comments/ok/good/","score":1,"num_comments":0,"over_18":false,"created_utc":1700000000}},{"not_data":123}]}}"#;
+        let posts = parse_reddit_json(json);
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].id, "ok");
+    }
+
+    #[test]
+    fn parse_reddit_html_empty_and_missing_attrs() {
+        assert_eq!(parse_reddit_html("").len(), 0);
+        assert_eq!(parse_reddit_html("<div>no shreddit-post here</div>").len(), 0);
+        // missing id and title -> skipped
+        let html = r#"<shreddit-post subreddit-prefixed="r/rust" score="10"></shreddit-post>"#;
+        assert_eq!(parse_reddit_html(html).len(), 0);
+        // permalink relative -> prefixed
+        let html = r#"<shreddit-post id="t3_123" post-title="t" subreddit-prefixed="r/rust" permalink="/r/rust/comments/123/t/"></shreddit-post>"#;
+        let posts = parse_reddit_html(html);
+        assert_eq!(posts[0].url, "https://www.reddit.com/r/rust/comments/123/t/");
+    }
+
+    #[test]
+    fn parse_old_reddit_html_empty_and_missing() {
+        assert_eq!(parse_old_reddit_html("").len(), 0);
+        assert_eq!(parse_old_reddit_html("<div>none</div>").len(), 0);
+        // missing title -> skipped
+        let html = r#"<div class="thing" data-fullname="t3_abc" data-subreddit="rust" data-permalink="/r/rust/comments/abc/t/"></div>"#;
+        assert_eq!(parse_old_reddit_html(html).len(), 0);
+        // valid entry still parsed
+        let html = r#"<div class="thing" data-fullname="t3_abc" data-subreddit="rust" data-author="a" data-score="5" data-comments-count="2" data-permalink="/r/rust/comments/abc/t/"><a class="title">hi</a></div><div class="thing" data-fullname="t3_def" data-subreddit="rust" data-permalink="/r/rust/comments/def/t2/"><a class="title"></a></div>"#;
+        // second has empty title -> skipped, so only 1
+        assert_eq!(parse_old_reddit_html(html).len(), 1);
     }
 }
 

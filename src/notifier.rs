@@ -165,24 +165,14 @@ fn notify_table(posts: &[Post], query_name: &str, limit: u32) {
             title_padded,
             dim("│")
         );
-        // row 2: url dim, spans title column, other columns blank
+        // row 2: full url on its own line — no truncation so it remains copy-pasteable
+        // Previously this was truncated to W_TITLE (60 chars) inside the table cell,
+        // which cut links like https://www.reddit.com/r/.../comments/... and broke copy-paste.
         let url_raw = p.url.replace('\n', " ");
-        let url_trunc = truncate_plain(&url_raw, W_TITLE);
-        let url_padded = pad_right(&url_trunc, W_TITLE);
-        println!(
-            "{} {} {} {} {} {} {} {} {} {} {}",
-            dim("│"),
-            pad_right("", W_NUM),
-            dim("│"),
-            pad_right("", W_SUB),
-            dim("│"),
-            pad_right("", W_SCORE),
-            dim("│"),
-            pad_right("", W_COMM),
-            dim("│"),
-            dim(&url_padded),
-            dim("│")
-        );
+        // Print outside table borders for clean selection/copy. Using plain URL
+        // keeps `> file` clean; modern terminals still make https:// clickable
+        // via auto-link detection, and we could wrap with OSC 8 if needed.
+        println!("  {} {}", dim("↳"), url_raw);
         if i + 1 < n {
             println!("{}", dim(&sep));
         }
