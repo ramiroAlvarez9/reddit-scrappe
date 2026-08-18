@@ -20,7 +20,7 @@ src/
   cookies.rs   # save/load decrypted cookies.json via CDP (for --no-browser), expiry filtering  human.rs     # sleep_jitter 800-2000ms, human_scroll 2-3 steps
   filter.rs    # filter_posts score/comments/age/nsfw/dedup
   config.rs    # serde_yaml config.yaml queries/filters/schedule_minutes
-  notifier.rs  # console STDOUT markdown table (default) / JSONL (--format json)
+  notifier.rs  # console STDOUT visual ANSI table (default) / JSONL (--format json)
 tests/
   fixtures/reddit_search_sample.html  # golden shreddit-post + old.reddit thing
   e2e_browser.rs  # #[ignore] smoke example.com
@@ -34,7 +34,7 @@ config.yaml    # 3 thematic queries, filters min_score 2 max_age 48h, schedule 3
 - **human agent**: delays `800-4000ms` jitter, `human_scroll` wheel 500-700 x2-3, warm-up `goto reddit.com/` before search (planned)
 - **reddit agent**: poll `shreddit-post` 15s (1s interval) + fallback `old.reddit` via `reqwest` on timeout/captcha, detects `Prove your humanity|blocked by network security|cf-challenge|hcaptcha|recaptcha` -> light fallback without hammering
 - **filter agent**: `filter_posts` + `seen.json` dedup
-- **notifier agent**: `notify` markdown table `| # | subreddit | score | ... |` (default) or JSONL `--format json`, `take(limit)`
+- **notifier agent**: `notify` visual ANSI table with `┌─┬─┐` + cyan subreddit + score colors (default) or JSONL `--format json`, `take(limit)`
 
 ## Commands
 
