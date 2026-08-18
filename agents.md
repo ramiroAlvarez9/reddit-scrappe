@@ -13,12 +13,11 @@
 
 ```
 src/
-  main.rs      # CLI --login/--logout/--once/--loop --no-browser --config --seen, loop 25-45m irregular shuffle (planned)
+  main.rs      # CLI --login/--logout/--once/--loop --no-browser --config --seen, search <inline-yaml> subcommand, loop 25-45m irregular shuffle (planned)
   browser.rs   # launch chromiumoxide hide()+new_headless+UA Chrome/151 + user_data_dir ~/.cache/reddit-scrappe/profile
   login.rs     # login_flow() headed + ENTER, logout_flow() rm profile, profile_dir()
   reddit.rs    # search_human() goto search?sort=new&t=week + human_scroll + parse shreddit-post + is_captcha + fallback old.reddit + search_no_browser()
-  cookies.rs   # save/load decrypted cookies.json via CDP (for --no-browser), expiry filtering
-  human.rs     # sleep_jitter 800-2000ms, human_scroll 2-3 steps
+  cookies.rs   # save/load decrypted cookies.json via CDP (for --no-browser), expiry filtering  human.rs     # sleep_jitter 800-2000ms, human_scroll 2-3 steps
   filter.rs    # filter_posts score/comments/age/nsfw/dedup
   config.rs    # serde_yaml config.yaml queries/filters/schedule_minutes
   notifier.rs  # console STDOUT (telegram disabled)
@@ -51,6 +50,8 @@ cargo run -- --login
 # run
 cargo run -- --once                        # headless new with persistent profile
 cargo run -- --once --no-browser           # no Chromium: reqwest + proxy + cookies.json (28MB vs 630MB, 60KB vs 300KB/query)
+cargo run -- search 'q: rust, subreddits: [rust], limit: 10'  # direct declarative search (YAML inline), shows exactly `limit` posts, no dedup
+cargo run -- search '{q: rust, filters: {min_score: 3, max_age_hours: 24}}'  # full YAML query schema
 cargo run -- --loop                        # every 30m + jitter ±60s (planned irregular 25-45m)
 cargo run -- --loop --no-browser           # loop without browser (light VPS)
 RUST_LOG=debug cargo run -- --once
@@ -113,4 +114,5 @@ Example:
 - E2E headless puro `DI_COUNTRY=es DI_CITY=madrid DI_SESSION=json-test-1 cargo run -- --once --config /tmp/test_config.yaml` still `timeout shreddit-post 15s 189k theme-beta` `is_captcha` -> but `fallback json GET https://old.reddit.com/r/rust/search.json?q=rust...` via proxy `country=es city=madrid` -> `parsed 25 posts from json` -> `25 raw posts 25 after filter` `notify` 5 posts OK. Same for `DI_COUNTRY=us` `25 posts`. `old.reddit` scrape as bot now works via **JSON** (HTML `div.thing 0` still blocked, but JSON `children` bypasses). `dataimpulse-mcp` `check_exit_ip` `us 82.40.113.131` `ar 181.209.92.163` ok, `fetch_page example.com` 127 chars.
 - Complete reddit bot: `DI_COUNTRY=... DI_SESSION=... cargo run -- --login` (bind to residential) once, then `cargo run -- --once` / `--loop` headless uses `old.reddit/search.json` + proxy + cookies, no need for `shreddit-post` JS. HTML fallback kept for non-JSON.
 - No-browser mode (branch `feat/no-browser-mode`): `cookies.rs` saves `page.get_cookies()` to `~/Library/Caches/reddit-scrappe/profile/cookies.json` (`7774 bytes` 10 reddit parts `2907 bytes`) via `save_cookies()` on `--login` + after each `--once` browser run; `--no-browser` (or `NO_BROWSER=1`) skips `launch_browser` and uses `reddit::search_no_browser()` via `reqwest::Proxy` + `cookies::load_cookie_header()` (expiry filter). E2E `DI_COUNTRY=es cargo run -- --no-browser --once` `25 posts` in `~2s` vs `~25s` with browser (`60KB` vs `300KB/query`, `28MB` vs `630MB RSS`). `cargo test 9 passed`. Anonymous without cookies still `403 theme-beta` `0 posts` as expected.
+- Direct `search` subcommand: `cargo run -- search 'q: rust, subreddits: [rust], limit: 10'` parses inline YAML (`config::parse_search_args`, tolerant of `key: v, key2: v2` and block/`{}`), uses permissive default filters (`min_score 0`, `max_age 720h`) so results always show, threads `limit` through URL + notifier (`take(limit)`), no dedup. No cookies -> clear English error + exit 1. `cargo test 11 passed`.
 - MCP DataImpulse OK (`~/mcp/dataimpulse-mcp` build ok, `di-proxy` `✓ connected`).

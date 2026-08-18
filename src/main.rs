@@ -7,7 +7,7 @@ mod login;
 mod notifier;
 mod reddit;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::collections::HashSet;
 use std::path::Path;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -29,6 +29,18 @@ struct Args {
     config: String,
     #[arg(long, default_value="seen.json")]
     seen: String,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Direct declarative search. Pass a single query as inline YAML.
+    /// Example:
+    ///   cargo run -- search 'q: rust, subreddits: [rust], sort: new, limit: 10'
+    /// Reuses the config.yaml query schema (q, subreddits, sort, limit, filters).
+    /// Always shows `limit` posts, no dedup. Requires login cookies (see --login).
+    Search { yaml: String },
 }
 
 fn load_dotenv() {
@@ -63,6 +75,10 @@ async fn main() -> anyhow::Result<()> {
     if args.logout {
         login::logout_flow()?;
         return Ok(());
+    }
+
+    if let Some(Command::Search { yaml }) = args.command {
+        return run_search(&yaml).await;
     }
 
     let cfg_path = args.config;
@@ -162,7 +178,7 @@ async fn run_once(browser: &chromiumoxide::browser::Browser, cfg_path: &str, see
         let fresh: Vec<_> = filtered.into_iter().filter(|p| !seen.contains(&p.id)).collect();
         for p in &fresh { new_seen.insert(p.id.clone()); }
         total_new += fresh.len();
-        notifier::notify_console(&fresh, &q.name);
+        notifier::notify_console(&fresh, &q.name, q.limit);
         // sequential jitter between queries
         human::sleep_jitter(2000, 4000).await;
     }
@@ -179,7 +195,7 @@ async fn run_once_no_browser(cfg_path: &str, seen_path: &str) -> anyhow::Result<
 
     for q in &cfg.queries {
         tracing::info!("[query:{}][no-browser] buscando \"{}\" en {:?} sort={}", q.name, q.q, if q.subreddits.is_empty(){"all".to_string()} else {q.subreddits.join(",")}, q.sort);
-        let posts = match reddit::search_no_browser(&q.q, &q.subreddits, &q.sort).await {
+        let posts = match reddit::search_no_browser(&q.q, &q.subreddits, &q.sort, q.limit).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("[query:{}][no-browser] search error: {:?}", q.name, e);
@@ -192,7 +208,7 @@ async fn run_once_no_browser(cfg_path: &str, seen_path: &str) -> anyhow::Result<
         let fresh: Vec<_> = filtered.into_iter().filter(|p| !seen.contains(&p.id)).collect();
         for p in &fresh { new_seen.insert(p.id.clone()); }
         total_new += fresh.len();
-        notifier::notify_console(&fresh, &q.name);
+        notifier::notify_console(&fresh, &q.name, q.limit);
         // lighter jitter since no browser (still shuffle human)
         human::sleep_jitter(800, 1500).await;
     }
@@ -202,6 +218,30 @@ async fn run_once_no_browser(cfg_path: &str, seen_path: &str) -> anyhow::Result<
         tracing::warn!("[no-browser] 0 nuevos y cookies inválidas — {}", cookies::cookies_status());
         tracing::warn!("[no-browser] Si ves 0 posts consistentes, ejecuta `cargo run -- --login` con residencial y reintenta --no-browser");
     }
+    Ok(())
+}
+
+async fn run_search(yaml: &str) -> anyhow::Result<()> {
+    let args = config::parse_search_args(yaml)?;
+    let filters = args.effective_filters();
+    tracing::info!("[search] q=\"{}\" subreddits={:?} sort={} limit={}", args.q, args.subreddits, args.sort, args.limit);
+    tracing::info!("[search] filters: min_score={} max_age={}h exclude_nsfw={}", filters.min_score, filters.max_age_hours, filters.exclude_nsfw);
+
+    if !cookies::has_valid_cookies() {
+        let msg = format!(
+            "Error: no valid login cookies found at {}.\n\nYou must log in once first. Run:\n\n    DI_COUNTRY=<iso2> cargo run -- --login\n\nThen log in in the Chrome window and press ENTER. This binds your session to a residential IP.\n\nCurrent cookie status: {}",
+            cookies::cookies_file_path().display(),
+            cookies::cookies_status()
+        );
+        eprintln!("{}", msg);
+        std::process::exit(1);
+    }
+
+    let posts = reddit::search_no_browser(&args.q, &args.subreddits, &args.sort, args.limit).await?;
+    tracing::info!("[search] {} raw posts", posts.len());
+    let filtered = filter::filter_posts(posts, &filters);
+    tracing::info!("[search] {} after filter", filtered.len());
+    notifier::notify_console(&filtered, &args.q, args.limit);
     Ok(())
 }
 

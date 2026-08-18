@@ -119,7 +119,7 @@ pub async fn search_human(page: &chromiumoxide::Page, query: &str, subreddits: &
                     tracing::warn!("[captcha] Prove your humanity detectado - abortando browser para este query, fallback a old.reddit sin reintento para no bannear");
                     // fallback json -> html -> browser con cookies + proxy
                     let cookie_header = get_reddit_cookie_header_via_page(page).await;
-                    let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone()).await.unwrap_or_default();
+                    let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone(), 25).await.unwrap_or_default();
                     if !json_fallback.is_empty() {
                         tracing::info!("[fallback json] old.reddit json devolvió {} posts", json_fallback.len());
                         all.extend(json_fallback);
@@ -138,7 +138,7 @@ pub async fn search_human(page: &chromiumoxide::Page, query: &str, subreddits: &
                 }
                 // fallback ligero json -> html -> browser
                 let cookie_header = get_reddit_cookie_header_via_page(page).await;
-                let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone()).await.unwrap_or_default();
+                let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone(), 25).await.unwrap_or_default();
                 if !json_fallback.is_empty() {
                     tracing::info!("[fallback json] old.reddit json devolvió {} posts (sin shreddit-post)", json_fallback.len());
                     all.extend(json_fallback);
@@ -161,7 +161,7 @@ pub async fn search_human(page: &chromiumoxide::Page, query: &str, subreddits: &
             if is_captcha(&html) {
                 tracing::warn!("[captcha] Prove your humanity detectado - aborto query, fallback ligero");
                 let cookie_header = get_reddit_cookie_header_via_page(page).await;
-                let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone()).await.unwrap_or_default();
+                let json_fallback = search_old_reddit_json(query, &sub, cookie_header.clone(), 25).await.unwrap_or_default();
                 if !json_fallback.is_empty() {
                     tracing::info!("[fallback json] old.reddit json devolvió {} posts", json_fallback.len());
                     all.extend(json_fallback);
@@ -195,7 +195,7 @@ pub async fn search_human(page: &chromiumoxide::Page, query: &str, subreddits: &
 
 /// No-browser search: uses only reqwest Proxy + decrypted cookies from `cookies.json`.
 /// This is the light path: no Chromium, ~60KB/query vs ~300KB with browser, ~28MB RSS vs ~630MB.
-pub async fn search_no_browser(query: &str, subreddits: &[String], sort: &str) -> anyhow::Result<Vec<Post>> {
+pub async fn search_no_browser(query: &str, subreddits: &[String], sort: &str, limit: u32) -> anyhow::Result<Vec<Post>> {
     let cookie_header = get_cookie_header_for_no_browser();
     if cookie_header.is_none() {
         tracing::warn!("[no-browser] no valid cookies at {} — run `cargo run -- --login` (with DI_COUNTRY/DI_SESSION to bind to residential IP). Trying anonymous (likely 403)", crate::cookies::cookies_file_path().display());
@@ -207,9 +207,9 @@ pub async fn search_no_browser(query: &str, subreddits: &[String], sort: &str) -
     let mut all = Vec::new();
     for sub in targets {
         let label = if sub.is_empty() { "all".to_string() } else { sub.clone() };
-        tracing::info!("[no-browser:{}] search \"{}\" sort={}", label, query, sort);
+        tracing::info!("[no-browser:{}] search \"{}\" sort={} limit={}", label, query, sort, limit);
         // 1) JSON endpoint (primary) — includes selftext, bypasses shreddit JS
-        let json_posts = search_old_reddit_json(query, &sub, cookie_header.clone()).await.unwrap_or_default();
+        let json_posts = search_old_reddit_json(query, &sub, cookie_header.clone(), limit).await.unwrap_or_default();
         if !json_posts.is_empty() {
             tracing::info!("[no-browser:{}] json returned {} posts", label, json_posts.len());
             all.extend(json_posts);
@@ -550,11 +550,11 @@ fn parse_reddit_json(json_str: &str) -> Vec<Post> {
     out
 }
 
-pub async fn search_old_reddit_json(query: &str, sub: &str, cookie_header: Option<String>) -> anyhow::Result<Vec<Post>> {
+pub async fn search_old_reddit_json(query: &str, sub: &str, cookie_header: Option<String>, limit: u32) -> anyhow::Result<Vec<Post>> {
     let url = if sub.is_empty() {
-        format!("https://old.reddit.com/search.json?q={}&sort=new&t=week&limit=25", urlencoding(query))
+        format!("https://old.reddit.com/search.json?q={}&sort=new&t=week&limit={}", urlencoding(query), limit)
     } else {
-        format!("https://old.reddit.com/r/{}/search.json?q={}&sort=new&t=week&restrict_sr=on&limit=25", sub, urlencoding(query))
+        format!("https://old.reddit.com/r/{}/search.json?q={}&sort=new&t=week&restrict_sr=on&limit={}", sub, urlencoding(query), limit)
     };
     tracing::info!("[fallback json] GET {}", url);
     let mut builder = reqwest::Client::builder()

@@ -1,12 +1,12 @@
 use crate::reddit::Post;
 
-pub fn notify_console(posts: &[Post], query_name: &str) {
+pub fn notify_console(posts: &[Post], query_name: &str, limit: u32) {
     if posts.is_empty() {
         tracing::info!("[notify:{}] sin resultados nuevos", query_name);
         return;
     }
     tracing::info!("[notify:{}] {} nuevos:", query_name, posts.len());
-    for p in posts.iter().take(5) {
+    for p in posts.iter().take(limit.max(1) as usize) {
         println!("  >> r/{} | {}↑ {}💬 | {}", p.subreddit, p.score, p.num_comments, p.title);
         println!("     https://www.reddit.com{}", p.url.replace("https://www.reddit.com", ""));
         // ensure full url printed
