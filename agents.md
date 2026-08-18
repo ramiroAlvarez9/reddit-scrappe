@@ -2,6 +2,7 @@
 
 > Rust scraper that simulates an anonymous human with persistent login to find posts where to talk about OrchardRun. Local STDOUT only for now, irregular human anti-blocking.
 > For more technical context (implementation + why each decision) see `/docs/IMPLEMENTATION.md`, `/docs/DECISIONS.md`, `/docs/RESULTS.md`.
+> **Command reference:** [`docs/COMMANDS.md`](docs/COMMANDS.md) — all commands for humans (`table`) and agents (`--format json` / `--no-browser`), with every parameter explained (`q`, `subreddits`, `sort`, `limit`, `filters: {min_score, min_comments, max_age_hours, exclude_nsfw}`, `--config`, `--seen`, `DI_*` env).
 
 ## Stack
 
@@ -37,6 +38,8 @@ config.yaml    # 3 thematic queries, filters min_score 2 max_age 48h, schedule 3
 - **notifier agent**: `notify` visual ANSI table with `┌─┬─┐` + cyan subreddit + score colors (default) or JSONL `--format json`, `take(limit)`
 
 ## Commands
+
+> Full reference: [`docs/COMMANDS.md`](docs/COMMANDS.md) — global flags, `search` params, `config.yaml`, env vars, human vs agent examples.
 
 ```bash
 # setup

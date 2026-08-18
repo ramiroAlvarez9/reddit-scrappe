@@ -4,6 +4,8 @@
 
 It logs in once as a real user, keeps the session, and scans Reddit every ~30 minutes looking for fresh, relevant threads (e.g. `AI infrastructure`, `seed round`, `orchard`) where a genuine comment about OrchardRun makes sense. No spam, no auto-posting — it just surfaces opportunities.
 
+> **Full command reference:** See [`docs/COMMANDS.md`](docs/COMMANDS.md) — all commands for humans and agents, with every parameter explained (`--login/--logout/--once/--loop/--no-browser`, `search 'q: ..., subreddits: [...], sort: ..., limit: ..., filters: {...}'`, `--format table|json`, env `DI_*`).
+
 ## Features
 
 - **Headless Chrome** (`chromiumoxide 0.9` `new` mode) with stealth (`hide()`, `--disable-blink-features=AutomationControlled`, `evaluate_on_new_document` hiding `navigator.webdriver`/`chrome`/`plugins`), real UA `Chrome/151`
@@ -118,11 +120,15 @@ notifier: "console"
 
 ## Usage
 
+Full reference with all flags and params: [`docs/COMMANDS.md`](docs/COMMANDS.md) (humans: ANSI table, agents: JSONL `--format json`, `--no-browser` light mode).
+
 ```bash
 cargo run -- --login                    # headed login
 cargo run -- --logout                   # rm profile + revocation hint
 cargo run -- --once                     # single scan
 cargo run -- --loop                     # loop every 30m + jitter ±60s (irregular 25-45m planned)
+cargo run -- search 'q: rust, limit: 3' # direct search (see docs/COMMANDS.md for q/subreddits/sort/limit/filters)
+cargo run -- search 'q: rust, limit: 10' --format json # agent JSONL
 RUST_LOG=debug cargo run -- --once      # verbose
 HEADLESS=0 cargo run -- --once          # headed debug
 cargo test -- --ignored --nocapture     # e2e (needs Chrome)
