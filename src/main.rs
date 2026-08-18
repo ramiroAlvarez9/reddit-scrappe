@@ -33,14 +33,25 @@ struct Args {
     command: Option<Command>,
 }
 
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum Format {
+    Table,
+    Json,
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Direct declarative search. Pass a single query as inline YAML.
     /// Example:
     ///   cargo run -- search 'q: rust, subreddits: [rust], sort: new, limit: 10'
+    ///   cargo run -- search 'q: rust, limit: 10' --format json
     /// Reuses the config.yaml query schema (q, subreddits, sort, limit, filters).
     /// Always shows `limit` posts, no dedup. Requires login cookies (see --login).
-    Search { yaml: String },
+    Search {
+        yaml: String,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
 }
 
 fn load_dotenv() {
@@ -77,8 +88,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if let Some(Command::Search { yaml }) = args.command {
-        return run_search(&yaml).await;
+    if let Some(Command::Search { yaml, format }) = args.command {
+        return run_search(&yaml, format).await;
     }
 
     let cfg_path = args.config;
@@ -221,10 +232,10 @@ async fn run_once_no_browser(cfg_path: &str, seen_path: &str) -> anyhow::Result<
     Ok(())
 }
 
-async fn run_search(yaml: &str) -> anyhow::Result<()> {
+async fn run_search(yaml: &str, format: Format) -> anyhow::Result<()> {
     let args = config::parse_search_args(yaml)?;
     let filters = args.effective_filters();
-    tracing::info!("[search] q=\"{}\" subreddits={:?} sort={} limit={}", args.q, args.subreddits, args.sort, args.limit);
+    tracing::info!("[search] q=\"{}\" subreddits={:?} sort={} limit={} format={:?}", args.q, args.subreddits, args.sort, args.limit, format);
     tracing::info!("[search] filters: min_score={} max_age={}h exclude_nsfw={}", filters.min_score, filters.max_age_hours, filters.exclude_nsfw);
 
     if !cookies::has_valid_cookies() {
@@ -241,7 +252,11 @@ async fn run_search(yaml: &str) -> anyhow::Result<()> {
     tracing::info!("[search] {} raw posts", posts.len());
     let filtered = filter::filter_posts(posts, &filters);
     tracing::info!("[search] {} after filter", filtered.len());
-    notifier::notify_console(&filtered, &args.q, args.limit);
+    let fmt = match format {
+        Format::Table => notifier::Format::Table,
+        Format::Json => notifier::Format::Json,
+    };
+    notifier::notify(&filtered, &args.q, args.limit, fmt);
     Ok(())
 }
 

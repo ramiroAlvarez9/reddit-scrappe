@@ -20,7 +20,7 @@ src/
   cookies.rs   # save/load decrypted cookies.json via CDP (for --no-browser), expiry filtering  human.rs     # sleep_jitter 800-2000ms, human_scroll 2-3 steps
   filter.rs    # filter_posts score/comments/age/nsfw/dedup
   config.rs    # serde_yaml config.yaml queries/filters/schedule_minutes
-  notifier.rs  # console STDOUT (telegram disabled)
+  notifier.rs  # console STDOUT markdown table (default) / JSONL (--format json)
 tests/
   fixtures/reddit_search_sample.html  # golden shreddit-post + old.reddit thing
   e2e_browser.rs  # #[ignore] smoke example.com
@@ -34,7 +34,7 @@ config.yaml    # 3 thematic queries, filters min_score 2 max_age 48h, schedule 3
 - **human agent**: delays `800-4000ms` jitter, `human_scroll` wheel 500-700 x2-3, warm-up `goto reddit.com/` before search (planned)
 - **reddit agent**: poll `shreddit-post` 15s (1s interval) + fallback `old.reddit` via `reqwest` on timeout/captcha, detects `Prove your humanity|blocked by network security|cf-challenge|hcaptcha|recaptcha` -> light fallback without hammering
 - **filter agent**: `filter_posts` + `seen.json` dedup
-- **notifier agent**: `notify_console` max 5/query STDOUT
+- **notifier agent**: `notify` markdown table `| # | subreddit | score | ... |` (default) or JSONL `--format json`, `take(limit)`
 
 ## Commands
 
@@ -51,6 +51,7 @@ cargo run -- --login
 cargo run -- --once                        # headless new with persistent profile
 cargo run -- --once --no-browser           # no Chromium: reqwest + proxy + cookies.json (28MB vs 630MB, 60KB vs 300KB/query)
 cargo run -- search 'q: rust, subreddits: [rust], limit: 10'  # direct declarative search (YAML inline), shows exactly `limit` posts, no dedup
+cargo run -- search 'q: rust, limit: 10' --format json        # JSONL for agents (1 JSON per line)
 cargo run -- search '{q: rust, filters: {min_score: 3, max_age_hours: 24}}'  # full YAML query schema
 cargo run -- --loop                        # every 30m + jitter ±60s (planned irregular 25-45m)
 cargo run -- --loop --no-browser           # loop without browser (light VPS)
@@ -60,7 +61,7 @@ NO_BROWSER=1 cargo run -- --once           # env alternative to --no-browser
 cargo run -- --logout                      # rm profile + revoke: reddit.com/settings/account
 
 # test
-cargo test -- --nocapture                  # 8 unit passed (filter/config/parse/captcha/human/login)
+cargo test -- --nocapture                  # 14 unit passed (filter/config/parse/captcha/human/login/cookies/notifier)
 cargo test -- --ignored --nocapture        # e2e (requires Chrome)
 REDIDT_E2E=1 cargo test e2e_reddit -- --ignored --nocapture
 
@@ -115,4 +116,5 @@ Example:
 - Complete reddit bot: `DI_COUNTRY=... DI_SESSION=... cargo run -- --login` (bind to residential) once, then `cargo run -- --once` / `--loop` headless uses `old.reddit/search.json` + proxy + cookies, no need for `shreddit-post` JS. HTML fallback kept for non-JSON.
 - No-browser mode (branch `feat/no-browser-mode`): `cookies.rs` saves `page.get_cookies()` to `~/Library/Caches/reddit-scrappe/profile/cookies.json` (`7774 bytes` 10 reddit parts `2907 bytes`) via `save_cookies()` on `--login` + after each `--once` browser run; `--no-browser` (or `NO_BROWSER=1`) skips `launch_browser` and uses `reddit::search_no_browser()` via `reqwest::Proxy` + `cookies::load_cookie_header()` (expiry filter). E2E `DI_COUNTRY=es cargo run -- --no-browser --once` `25 posts` in `~2s` vs `~25s` with browser (`60KB` vs `300KB/query`, `28MB` vs `630MB RSS`). `cargo test 9 passed`. Anonymous without cookies still `403 theme-beta` `0 posts` as expected.
 - Direct `search` subcommand: `cargo run -- search 'q: rust, subreddits: [rust], limit: 10'` parses inline YAML (`config::parse_search_args`, tolerant of `key: v, key2: v2` and block/`{}`), uses permissive default filters (`min_score 0`, `max_age 720h`) so results always show, threads `limit` through URL + notifier (`take(limit)`), no dedup. No cookies -> clear English error + exit 1. `cargo test 11 passed`.
+- Search output formats: default `table` → markdown table `| # | subreddit | score | ... |` for humans; `--format json` → JSONL (1 JSON per line) for agents via `notifier::Format`. `cargo test 14 passed`.
 - MCP DataImpulse OK (`~/mcp/dataimpulse-mcp` build ok, `di-proxy` `✓ connected`).
